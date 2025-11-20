@@ -1,0 +1,8 @@
+{
+  "name": "App Comunicação Épica",
+  "description": "A gamified application to master the art of communication. Evolve your avatar, complete quests, and track your progress from a novice speaker to a communication master.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
