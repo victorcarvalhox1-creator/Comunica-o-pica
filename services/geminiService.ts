@@ -10,7 +10,7 @@ export const getQuestFeedback = async (questTitle: string, userSubmission: strin
   const apiKey = getApiKey();
 
   // If API Key is available, use the real Gemini API
-  if (apiKey && apiKey !== "YOUR_API_KEY_HERE") {
+  if (apiKey && apiKey !== "AIzaSyA-AssPA1IdD0UKWDn7rkyXmjcd8eDM04U") {
     try {
         const ai = new GoogleGenAI({ apiKey: apiKey });
         const response = await ai.models.generateContent({
