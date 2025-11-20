@@ -75,14 +75,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ userData, onSelectQuest, o
         
         <div className="flex justify-between items-end mb-6 relative z-10">
             <div>
-                <span className="text-purple-300 text-[10px] font-bold uppercase tracking-widest block mb-1 shadow-black drop-shadow-sm">
-                    Nível Atual
-                </span>
+                <div className="flex items-center mb-1">
+                    <span className="text-purple-300 text-[10px] font-bold uppercase tracking-widest shadow-black drop-shadow-sm">
+                        Nível Atual
+                    </span>
+                    <span className="ml-2 w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-[0_0_5px_#22c55e]" title="Conectado ao Banco de Dados"></span>
+                </div>
                 <h2 className="font-bold font-oxanium text-2xl text-white tracking-wide drop-shadow-md">
                     {userData.name}
                 </h2>
                 <p className="text-gray-400 text-xs font-medium mt-1 flex items-center">
-                    <span className="w-2 h-2 rounded-full bg-green-400 mr-2 animate-pulse"></span>
                     {currentLevelInfo?.title || 'Viajante'}
                 </p>
             </div>

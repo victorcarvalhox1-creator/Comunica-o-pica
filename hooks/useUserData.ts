@@ -1,7 +1,8 @@
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { UserData, SpecialEvent, QuestType } from '../types';
 import { LEVELS, QUESTS, MILESTONES } from '../constants';
+import { supabase } from '../services/supabaseClient';
 
 const INITIAL_USER_DATA: UserData = {
   name: 'Viajante',
@@ -30,70 +31,115 @@ const INITIAL_USER_DATA: UserData = {
   milestonesReached: [],
 };
 
-const LOCAL_STORAGE_KEY = 'epic-communication-app-user-data-v4';
+export const useUserData = (userId: string) => {
+  const [userData, setUserData] = useState<UserData>(INITIAL_USER_DATA);
+  const [loading, setLoading] = useState(true);
+  // Ref to track if initial load has happened to prevent overwriting DB with initial state
+  const isLoaded = useRef(false);
+  // Ref for debounce timeout
+  const saveTimeout = useRef<NodeJS.Timeout | null>(null);
 
-export const useUserData = () => {
-  const [userData, setUserData] = useState<UserData>(() => {
-    try {
-      const savedData = window.localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (savedData) {
-          const parsed = JSON.parse(savedData);
-          // Merge with initial to ensure new fields exist
-          return { 
-              ...INITIAL_USER_DATA, 
-              ...parsed, 
-              skills: { ...INITIAL_USER_DATA.skills, ...(parsed.skills || {}) },
-              gameCooldowns: { ...INITIAL_USER_DATA.gameCooldowns, ...(parsed.gameCooldowns || {}) },
-              eventHistory: parsed.eventHistory || [],
-              lastCustomEventDate: parsed.lastCustomEventDate || null,
-              unlockedFeatures: parsed.unlockedFeatures || [],
-              milestonesReached: parsed.milestonesReached || [],
-          };
-      }
-      return INITIAL_USER_DATA;
-    } catch (error) {
-      console.error("Error reading from localStorage", error);
-      return INITIAL_USER_DATA;
-    }
-  });
-
+  // 1. Load data from Supabase on mount
   useEffect(() => {
-    try {
-      window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(userData));
-    } catch (error) {
-      console.error("Error writing to localStorage", error);
+    const loadData = async () => {
+      if (!userId) return;
+      setLoading(true);
+
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('game_data')
+          .eq('id', userId)
+          .single();
+
+        if (error && error.code !== 'PGRST116') {
+            console.error("Error loading data:", error);
+        }
+
+        if (data && data.game_data) {
+          // Merge with initial to ensure new schema fields exist if app updates
+          setUserData({
+              ...INITIAL_USER_DATA,
+              ...data.game_data,
+              // Ensure nested objects are merged correctly
+              skills: { ...INITIAL_USER_DATA.skills, ...(data.game_data.skills || {}) },
+          });
+        } else {
+            // New user or no data, stick with initial and trigger a save
+            setUserData(INITIAL_USER_DATA);
+        }
+      } catch (err) {
+          console.error("Unexpected error loading:", err);
+      } finally {
+        setLoading(false);
+        isLoaded.current = true;
+      }
+    };
+
+    loadData();
+  }, [userId]);
+
+  // 2. Save data to Supabase whenever userData changes (Debounced)
+  useEffect(() => {
+    if (!userId || !isLoaded.current) return;
+
+    // Clear previous timeout
+    if (saveTimeout.current) {
+        clearTimeout(saveTimeout.current);
     }
-  }, [userData]);
+
+    // Set new timeout (autosave after 2 seconds of inactivity)
+    saveTimeout.current = setTimeout(async () => {
+        try {
+            const { error } = await supabase
+                .from('profiles')
+                .upsert({ 
+                    id: userId, 
+                    game_data: userData,
+                    updated_at: new Date().toISOString()
+                });
+            
+            if (error) console.error("Error saving data:", error);
+            else console.log("Game saved to Supabase");
+        } catch (err) {
+            console.error("Unexpected error saving:", err);
+        }
+    }, 2000);
+
+    return () => {
+        if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    };
+  }, [userData, userId]);
+
 
   const setUserName = useCallback((name: string) => {
       setUserData(prev => ({ ...prev, name }));
   }, []);
 
   const addXp = useCallback((amount: number): { leveledUp: boolean; newLevel: number | null } => {
-    let currentXp = userData.xp + amount;
-    let currentLevel = userData.level;
-    let leveledUp = false;
-
-    let xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
-
-    // Check for level up loop
-    while (currentXp >= xpForNextLevel) {
-      leveledUp = true;
-      currentXp -= xpForNextLevel;
-      currentLevel++;
-      xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
-    }
+    let result = { leveledUp: false, newLevel: null as number | null };
     
     setUserData(prev => {
+        let currentXp = prev.xp + amount;
+        let currentLevel = prev.level;
+        let leveledUp = false;
+        let xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
+
+        // Check for level up loop
+        while (currentXp >= xpForNextLevel) {
+            leveledUp = true;
+            currentXp -= xpForNextLevel;
+            currentLevel++;
+            xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
+        }
+
         const newUnlockedFeatures = [...prev.unlockedFeatures];
         const newMilestonesReached = [...prev.milestonesReached];
         
-        // Check if the new level is a milestone
         if (leveledUp && MILESTONES[currentLevel]) {
             const milestone = MILESTONES[currentLevel];
             if (!newMilestonesReached.includes(currentLevel)) {
                 newMilestonesReached.push(currentLevel);
-                // Add new features to unlocked list
                 milestone.unlocks.forEach(feature => {
                     if (!newUnlockedFeatures.includes(feature)) {
                         newUnlockedFeatures.push(feature);
@@ -101,7 +147,13 @@ export const useUserData = () => {
                 });
             }
         }
-
+        
+        // We can't return from the setter, so we calculate here. 
+        // To extract the result for the caller, strictly we'd need a ref or separate state, 
+        // but for this gamification pattern, the caller usually just wants to know if it happened.
+        // Note: The return value of addXp won't update immediately because setState is async.
+        // This logic needs to return the CALCULATION, while setting the state.
+        
         return {
             ...prev,
             xp: currentXp,
@@ -111,6 +163,19 @@ export const useUserData = () => {
             milestonesReached: newMilestonesReached,
         };
     });
+    
+    // Re-calculate purely for return value (State updates are async)
+    // This is a slight duplication but necessary for the immediate feedback UI (confetti/modal)
+    let currentXp = userData.xp + amount;
+    let currentLevel = userData.level;
+    let leveledUp = false;
+    let xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
+    while (currentXp >= xpForNextLevel) {
+      leveledUp = true;
+      currentXp -= xpForNextLevel;
+      currentLevel++;
+      xpForNextLevel = LEVELS.find(l => l.level === currentLevel)?.xpRequired ?? Infinity;
+    }
 
     return { leveledUp, newLevel: leveledUp ? currentLevel : null };
   }, [userData]);
@@ -153,7 +218,6 @@ export const useUserData = () => {
       return addXp(event.xp);
   }, [userData, addXp]);
 
-  // New function to handle User Input Custom Events
   const registerCustomEvent = useCallback((title: string, description: string, requestedXp: number) => {
       const today = new Date().toISOString().split('T')[0];
       
@@ -243,5 +307,5 @@ export const useUserData = () => {
       setUserData(prev => ({...prev, coins: prev.coins + amount}));
   }, []);
 
-  return { userData, setUserName, completeQuest, completeEvent, registerCustomEvent, completeGame, addJournalEntry, completeDailyChallenge, addCoins };
+  return { userData, loading, setUserName, completeQuest, completeEvent, registerCustomEvent, completeGame, addJournalEntry, completeDailyChallenge, addCoins };
 };

@@ -13,20 +13,25 @@ import { View, Quest, MiniGame } from './types';
 import { LevelUpModal } from './components/LevelUpModal';
 import { Confetti } from './components/Confetti';
 import { OnboardingModal } from './components/OnboardingModal';
+import { Auth } from './components/Auth';
 import { LEVELS } from './constants';
+import { supabase } from './services/supabaseClient';
+import { Session } from '@supabase/supabase-js';
 
-const App: React.FC = () => {
+// Wrapper to handle the authenticated state and user data hook
+const AuthenticatedApp: React.FC<{ userId: string; onLogout: () => void }> = ({ userId, onLogout }) => {
   const [activeView, setActiveView] = useState<View>('dashboard');
-  const { userData, setUserName, completeQuest, registerCustomEvent, completeGame, addJournalEntry, completeDailyChallenge } = useUserData();
+  const { userData, loading, setUserName, completeQuest, registerCustomEvent, completeGame, addJournalEntry, completeDailyChallenge } = useUserData(userId);
   const [levelUpInfo, setLevelUpInfo] = useState<{ isOpen: boolean; newLevel: number | null }>({ isOpen: false, newLevel: null });
   const [showConfetti, setShowConfetti] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
-      if (userData.name === 'Viajante' || !userData.name) {
+      // Only show onboarding if name is default AND data has finished loading
+      if (!loading && userData.name === 'Viajante') {
           setShowOnboarding(true);
       }
-  }, [userData.name]);
+  }, [userData.name, loading]);
 
   const triggerConfetti = () => {
       setShowConfetti(true);
@@ -82,6 +87,17 @@ const App: React.FC = () => {
   };
 
   const renderContent = () => {
+    if (loading) {
+        return (
+            <div className="min-h-[60vh] flex items-center justify-center">
+                 <div className="flex flex-col items-center">
+                    <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p className="text-purple-300 font-oxanium animate-pulse">Carregando dados do servidor...</p>
+                 </div>
+            </div>
+        );
+    }
+
     switch (activeView) {
       case 'dashboard':
         return <Dashboard 
@@ -96,7 +112,7 @@ const App: React.FC = () => {
       case 'events':
         return <Events userData={userData} onRegisterEvent={handleRegisterEvent} />;
       case 'profile':
-        return <Profile userData={userData} />;
+        return <Profile userData={userData} onLogout={onLogout} />;
       case 'games':
         return <Games userData={userData} onCompleteGame={handleCompleteGame} />;
       default:
@@ -111,7 +127,7 @@ const App: React.FC = () => {
   const newLevelData = levelUpInfo.newLevel ? LEVELS.find(l => l.level === levelUpInfo.newLevel) : null;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-roboto">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-roboto pb-16 md:pb-0">
       <Confetti isActive={showConfetti} />
       {showOnboarding && <OnboardingModal currentName={userData.name} onSave={handleSaveName} />}
       
@@ -132,6 +148,46 @@ const App: React.FC = () => {
       )}
     </div>
   );
+}
+
+const App: React.FC = () => {
+  const [session, setSession] = useState<Session | null>(null);
+  const [appLoading, setAppLoading] = useState(true);
+
+  useEffect(() => {
+    // 1. Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAppLoading(false);
+    });
+
+    // 2. Listen for changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setAppLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+      await supabase.auth.signOut();
+  };
+
+  if (appLoading) {
+      return <div className="min-h-screen bg-[#0b0514] flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+  }
+
+  if (!session) {
+    // Auth component handles the login calls to Supabase internally
+    return <Auth onLogin={() => {/* State update handled by onAuthStateChange */}} />;
+  }
+
+  return <AuthenticatedApp userId={session.user.id} onLogout={handleLogout} />;
 };
 
 export default App;
